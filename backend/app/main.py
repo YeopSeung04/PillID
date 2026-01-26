@@ -1,0 +1,258 @@
+# app/main.py
+print("### RUNNING app/main.py v-SHAPE-COLOR-PREFILTER-FULL ###")
+
+import re
+import asyncio
+from fastapi import FastAPI, UploadFile, File, HTTPException
+
+from app.schemas import IdentifyResponse, Candidate
+from app.utils.image_io import read_upload_to_bgr
+from app.utils.debug_runs import make_run_dir
+from app.services.ocr import extract_imprint_text
+from app.services.vision import guess_shape_color
+from app.services.ranker import score_candidate, match_level
+from app.services.mfds_cache import mfds_cache
+
+MFDS_PAGES = 50
+MFDS_ROWS = 100
+MFDS_TTL_SECONDS = 6 * 60 * 60
+
+app = FastAPI(title="PillID MVP (Cached MFDS + OCR + Vision + DebugRuns)")
+
+
+def _raw_tokens(s: str) -> list[str]:
+    return re.findall(r"[A-Z0-9]{2,}", (s or "").upper())
+
+
+def _good_token(tok: str) -> bool:
+    if not (2 <= len(tok) <= 8):
+        return False
+    if not re.search(r"[A-Z]", tok):
+        return False
+    return True
+
+
+def _merge_tokens(*texts: str) -> str:
+    seen = set()
+    out = []
+    for t in texts:
+        for tok in _raw_tokens(t):
+            if not _good_token(tok):
+                continue
+            if tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+    return " ".join(out)
+
+
+def _post_fix_imprint(imprint: str) -> str:
+    """
+    OCR 결과 노이즈를 '가볍게'만 정리.
+    (과정이 너무 공격적이면 정답도 날아감)
+    """
+    s = (imprint or "").upper()
+
+    # D-W 뒤에 붙는 1글자 제거
+    s = re.sub(r"(D-W)[A-Z0-9]", r"\1", s)
+
+    # PAC 주변 꼬리 제거(붙여읽기 완화)
+    s = re.sub(r"[A-Z]?PAC[A-Z]?", "PAC", s)
+
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _shape_aliases(shape: str | None) -> set[str]:
+    if not shape:
+        return set()
+    shape = shape.strip()
+    if shape == "타원형":
+        return {"타원형", "장방형"}
+    if shape == "장방형":
+        return {"장방형", "타원형"}
+    return {shape}
+
+
+def _color_aliases(color: str | None) -> set[str]:
+    if not color:
+        return set()
+    c = color.strip()
+    if c == "주황":
+        return {"주황", "주황색", "연주황", "적주황"}
+    if c == "빨강":
+        return {"빨강", "적색", "빨간", "적"}
+    if c == "하양":
+        return {"하양", "흰색", "백색"}
+    if c == "파랑":
+        return {"파랑", "청색", "파란"}
+    if c == "노랑":
+        return {"노랑", "황색", "노란"}
+    if c == "연두":
+        return {"연두", "녹색", "초록", "초록색"}
+    return {c}
+
+
+def _prefilter_items(items_all, shape_guess, color_guess):
+    shapes = _shape_aliases(shape_guess)
+    colors = _color_aliases(color_guess)
+
+    def shape_ok(it):
+        if not shapes:
+            return True
+        v = it.get("DRUG_SHAPE")
+        return (v is not None) and (str(v).strip() in shapes)
+
+    def color_ok(it):
+        if not colors:
+            return True
+        v = it.get("COLOR_CLASS1")
+        return (v is not None) and (str(v).strip() in colors)
+
+    strong = [it for it in items_all if shape_ok(it) and color_ok(it)]
+    if len(strong) >= 30:
+        return strong, "strong"
+
+    mid = [it for it in items_all if shape_ok(it)]
+    if len(mid) >= 30:
+        return mid, "mid"
+
+    weak = [it for it in items_all if color_ok(it)]
+    if len(weak) >= 30:
+        return weak, "weak"
+
+    return items_all, "none"
+
+
+@app.on_event("startup")
+async def on_startup():
+    async def _load():
+        try:
+            await mfds_cache.refresh(pages=MFDS_PAGES, rows=MFDS_ROWS)
+            print(f"[MFDS] cache loaded: {len(mfds_cache.items)} items")
+        except Exception as e:
+            print(f"[MFDS] cache preload failed: {e}")
+
+    asyncio.create_task(_load())
+
+
+@app.get("/health")
+async def health():
+    return {
+        "ok": True,
+        "mfds_cache_ready": mfds_cache.is_ready(),
+        "mfds_cache_loading": mfds_cache.loading,
+        "mfds_items": len(mfds_cache.items),
+        "mfds_loaded_at": mfds_cache.loaded_at,
+        "ttl_seconds": MFDS_TTL_SECONDS,
+    }
+
+
+@app.post("/identify", response_model=IdentifyResponse)
+async def identify(file: UploadFile = File(...)):
+    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=400, detail="Only jpg/png/webp allowed")
+
+    run_dir = make_run_dir(base_dir="debug_runs")
+    print(f"[DEBUG] run_dir = {run_dir}")
+
+    try:
+        bgr = await read_upload_to_bgr(file, save_path=f"{run_dir}/input_original.jpg")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    shape_guess, color_guess = guess_shape_color(
+        bgr,
+        debug_dir=run_dir,
+        debug_prefix="vision",
+    )
+    print(f"[DEBUG] shape_guess = {shape_guess!r} color_guess = {color_guess!r}")
+
+    h, w = bgr.shape[:2]
+    left = bgr[:, : w // 2]
+    right = bgr[:, w // 2 :]
+
+    im_full = extract_imprint_text(bgr, debug_dir=run_dir, debug_prefix="full")
+    im_l = extract_imprint_text(left, debug_dir=run_dir, debug_prefix="left")
+    im_r = extract_imprint_text(right, debug_dir=run_dir, debug_prefix="right")
+
+    imprint = _merge_tokens(im_full, im_l, im_r)
+    imprint = _post_fix_imprint(imprint)
+
+    print("[DEBUG] im_full =", repr(im_full))
+    print("[DEBUG] im_l    =", repr(im_l))
+    print("[DEBUG] im_r    =", repr(im_r))
+    print("[DEBUG] imprint =", repr(imprint))
+
+    if not imprint:
+        return IdentifyResponse(
+            ocr_text="",
+            ocr_variants=[],
+            color_guess=color_guess,
+            shape_guess=shape_guess,
+            candidates=[],
+            note="각인(OCR) 인식에 실패했습니다. 각인이 보이도록 정면에서 더 선명하게 촬영하세요.",
+        )
+
+    if not mfds_cache.is_ready():
+        return IdentifyResponse(
+            ocr_text=imprint,
+            ocr_variants=[],
+            color_guess=color_guess,
+            shape_guess=shape_guess,
+            candidates=[],
+            note="MFDS 캐시를 로딩 중입니다. /health에서 mfds_items가 채워진 뒤 다시 시도하세요.",
+        )
+
+    if mfds_cache.is_stale(MFDS_TTL_SECONDS) and not mfds_cache.loading:
+        asyncio.create_task(mfds_cache.refresh(pages=MFDS_PAGES, rows=MFDS_ROWS))
+
+    items_all = mfds_cache.items
+    filtered, mode = _prefilter_items(items_all, shape_guess, color_guess)
+    print(
+        f"[DEBUG] prefilter({mode}): all={len(items_all)} -> filtered={len(filtered)} | "
+        f"shape={shape_guess} color={color_guess}"
+    )
+
+    scored = []
+    for it in filtered:
+        s = score_candidate(it, imprint, color_guess, shape_guess)
+        if s > 0:
+            scored.append((s, it))
+
+    if not scored:
+        return IdentifyResponse(
+            ocr_text=imprint,
+            ocr_variants=[],
+            color_guess=color_guess,
+            shape_guess=shape_guess,
+            candidates=[],
+            note="각인은 인식했지만 매칭 후보를 찾지 못했습니다. 각인을 더 크게/선명하게 찍어 다시 시도하세요.",
+        )
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:5]
+
+    candidates = []
+    for s, it in top:
+        candidates.append(
+            Candidate(
+                item_name=str(it.get("ITEM_NAME") or "UNKNOWN"),
+                entp_name=str(it.get("ENTP_NAME")) if it.get("ENTP_NAME") else None,
+                score=int(s),
+                match_level=match_level(int(s)),
+                imprint=str(it.get("PRINT_FRONT") or it.get("PRINT_BACK"))
+                if (it.get("PRINT_FRONT") or it.get("PRINT_BACK"))
+                else None,
+                color=str(it.get("COLOR_CLASS1")) if it.get("COLOR_CLASS1") else None,
+                shape=str(it.get("DRUG_SHAPE")) if it.get("DRUG_SHAPE") else None,
+            )
+        )
+
+    return IdentifyResponse(
+        ocr_text=imprint,
+        ocr_variants=[],
+        color_guess=color_guess,
+        shape_guess=shape_guess,
+        candidates=candidates,
+        note="본 결과는 의약품 식별 참고용 후보이며 진단/복용판단이 아닙니다. 복용 전 약사/의사와 상담하세요.",
+    )

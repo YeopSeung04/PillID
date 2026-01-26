@@ -1,0 +1,115 @@
+fastapi==0.112.2
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.8.2
+
+numpy==1.26.4
+opencv-python==4.10.0.84p
+pillow==10.4.0
+
+paddleocr==2.7.3
+paddlepaddle==2.6.2
+
+httpx==0.27.2
+python-dotenv==1.0.1
+
+
+
+########################################
+# Package                Version
+# --------------------- -----------
+# annotated-types       0.7.0
+# anyio                 4.12.1
+# astor                 0.8.1
+# attrdict              2.0.1
+# babel                 2.17.0
+# bce-python-sdk        0.9.59
+# beautifulsoup4        4.14.3
+# blinker               1.9.0
+# cachetools            6.2.5
+# certifi               2026.1.4
+# charset-normalizer    3.4.4
+# click                 8.3.1
+# colorama              0.4.6
+# contourpy             1.3.2
+# cssselect             1.3.0
+# cssutils              2.11.1
+# cycler                0.12.1
+# Cython                3.2.4
+# decorator             5.2.1
+# et_xmlfile            2.0.0
+# exceptiongroup        1.3.1
+# fastapi               0.112.2
+# fire                  0.7.1
+# Flask                 3.1.2
+# flask-babel           4.0.0
+# fonttools             4.61.1
+# future                1.0.0
+# h11                   0.16.0
+# httpcore              1.0.9
+# httptools             0.7.1
+# httpx                 0.27.2
+# idna                  3.11
+# ImageIO               2.37.2
+# imgaug                0.4.0
+# itsdangerous          2.2.0
+# Jinja2                3.1.6
+# kiwisolver            1.4.9
+# lazy_loader           0.4
+# lmdb                  1.7.5
+# lxml                  6.0.2
+# MarkupSafe            3.0.3
+# matplotlib            3.10.8
+# more-itertools        10.8.0
+# networkx              3.4.2
+# numpy                 1.26.4
+# opencv-contrib-python 4.6.0.66
+# opencv-python         4.10.0.84
+# openpyxl              3.1.5
+# opt-einsum            3.3.0
+# packaging             26.0
+# paddleocr             2.7.3
+# paddlepaddle          2.6.2
+# pandas                2.3.3
+# pdf2docx              0.5.8
+# pillow                10.4.0
+# pip                   25.3
+# premailer             3.10.0
+# protobuf              3.20.2
+# psutil                7.2.1
+# pyclipper             1.4.0
+# pycryptodome          3.23.0
+# pydantic              2.8.2
+# pydantic_core         2.20.1
+# PyMuPDF               1.26.7
+# pyparsing             3.3.2
+# python-dateutil       2.9.0.post0
+# python-docx           1.2.0
+# python-dotenv         1.0.1
+# python-multipart      0.0.9
+# pytz                  2025.2
+# PyYAML                6.0.3
+# RapidFuzz             3.14.3
+# rarfile               4.2
+# requests              2.32.5
+# scikit-image          0.25.2
+# scipy                 1.15.3
+# setuptools            80.9.0
+# shapely               2.1.2
+# six                   1.17.0
+# sniffio               1.3.1
+# soupsieve             2.8.3
+# starlette             0.38.6
+# termcolor             3.3.0
+# tifffile              2025.5.10
+# tqdm                  4.67.1
+# typing_extensions     4.15.0
+# tzdata                2025.3
+# urllib3               2.6.3
+# uvicorn               0.30.6
+# visualdl              2.5.3
+# watchfiles            1.1.1
+# websockets            16.0
+# Werkzeug              3.1.5
+# wheel                 0.45.1
+#######################################

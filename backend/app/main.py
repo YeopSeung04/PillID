@@ -21,7 +21,8 @@ app = FastAPI(title="PillID MVP (Cached MFDS + OCR + Vision + DebugRuns)")
 
 
 def _raw_tokens(s: str) -> list[str]:
-    return re.findall(r"[A-Z0-9]{2,}", (s or "").upper())
+    return re.findall(r"[A-Z0-9\-]{2,}", (s or "").upper())
+
 
 
 def _good_token(tok: str) -> bool:
@@ -53,7 +54,7 @@ def _post_fix_imprint(imprint: str) -> str:
     s = (imprint or "").upper()
 
     # D-W 뒤에 붙는 1글자 제거
-    s = re.sub(r"(D-W)[A-Z0-9]", r"\1", s)
+    # s = re.sub(r"(D-W)[A-Z0-9]", r"\1", s)
 
     # PAC 주변 꼬리 제거(붙여읽기 완화)
     s = re.sub(r"[A-Z]?PAC[A-Z]?", "PAC", s)
@@ -76,21 +77,34 @@ def _shape_aliases(shape: str | None) -> set[str]:
 def _color_aliases(color: str | None) -> set[str]:
     if not color:
         return set()
-    c = color.strip()
-    if c == "주황":
-        return {"주황", "주황색", "연주황", "적주황"}
-    if c == "빨강":
-        return {"빨강", "적색", "빨간", "적"}
-    if c == "하양":
-        return {"하양", "흰색", "백색"}
-    if c == "파랑":
-        return {"파랑", "청색", "파란"}
-    if c == "노랑":
-        return {"노랑", "황색", "노란"}
-    if c == "연두":
-        return {"연두", "녹색", "초록", "초록색"}
-    return {c}
 
+    # "하양+주황" / "하양,주황" 등 분해 지원
+    parts = re.split(r"[+,/ ]+", color.strip())
+    out: set[str] = set()
+
+    def add_one(c: str):
+        c = c.strip()
+        if not c:
+            return
+        if c == "주황":
+            out.update({"주황", "주황색", "연주황", "적주황"})
+        elif c == "빨강":
+            out.update({"빨강", "적색", "빨간", "적"})
+        elif c == "하양":
+            out.update({"하양", "흰색", "백색"})
+        elif c == "파랑":
+            out.update({"파랑", "청색", "파란"})
+        elif c == "노랑":
+            out.update({"노랑", "황색", "노란"})
+        elif c == "연두":
+            out.update({"연두", "녹색", "초록", "초록색"})
+        else:
+            out.add(c)
+
+    for p in parts:
+        add_one(p)
+
+    return out
 
 def _prefilter_items(items_all, shape_guess, color_guess):
     shapes = _shape_aliases(shape_guess)
@@ -105,9 +119,13 @@ def _prefilter_items(items_all, shape_guess, color_guess):
     def color_ok(it):
         if not colors:
             return True
-        v = it.get("COLOR_CLASS1")
-        return (v is not None) and (str(v).strip() in colors)
+        c1 = it.get("COLOR_CLASS1")
+        c2 = it.get("COLOR_CLASS2")
 
+        s1 = str(c1).strip() if c1 else ""
+        s2 = str(c2).strip() if c2 else ""
+
+        return (s1 in colors) or (s2 in colors)
     strong = [it for it in items_all if shape_ok(it) and color_ok(it)]
     if len(strong) >= 30:
         return strong, "strong"
@@ -121,6 +139,10 @@ def _prefilter_items(items_all, shape_guess, color_guess):
         return weak, "weak"
 
     return items_all, "none"
+
+def _tokens(s: str) -> list[str]:
+    return re.findall(r"[A-Z0-9\-]{2,}", (s or "").upper().strip())
+
 
 
 @app.on_event("startup")
@@ -144,6 +166,7 @@ async def health():
         "mfds_items": len(mfds_cache.items),
         "mfds_loaded_at": mfds_cache.loaded_at,
         "ttl_seconds": MFDS_TTL_SECONDS,
+        "mfds_progress": mfds_cache.progress,
     }
 
 
@@ -206,11 +229,29 @@ async def identify(file: UploadFile = File(...)):
     if mfds_cache.is_stale(MFDS_TTL_SECONDS) and not mfds_cache.loading:
         asyncio.create_task(mfds_cache.refresh(pages=MFDS_PAGES, rows=MFDS_ROWS))
 
-    items_all = mfds_cache.items
-    filtered, mode = _prefilter_items(items_all, shape_guess, color_guess)
+    # 1) print_index 기반으로 1차 후보군(seed) 만들기
+    toks = _tokens(imprint)  # ranker.py의 _tokens를 여기로 가져오거나 동일 구현
+    candidate_idx = set()
+
+    for t in toks:
+        # 하이픈 제거 변형까지 같이 조회 (DW vs D-W)
+        variants = {t, t.replace("-", "")}
+        for v in variants:
+            for i in mfds_cache.print_index.get(v, []):
+                candidate_idx.add(i)
+
+    if candidate_idx:
+        items_seed = [mfds_cache.items[i] for i in candidate_idx]
+    else:
+        items_seed = mfds_cache.items
+
+    # 2) seed에 대해 shape/color prefilter
+    filtered, mode = _prefilter_items(items_seed, shape_guess, color_guess)
+
     print(
-        f"[DEBUG] prefilter({mode}): all={len(items_all)} -> filtered={len(filtered)} | "
-        f"shape={shape_guess} color={color_guess}"
+        f"[DEBUG] seed={len(candidate_idx) if candidate_idx else 'ALL'} | "
+        f"prefilter({mode}): seed={len(items_seed)} -> filtered={len(filtered)} | "
+        f"shape={shape_guess} color={color_guess} toks={toks}"
     )
 
     scored = []

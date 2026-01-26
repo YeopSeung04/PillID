@@ -59,7 +59,7 @@ def _ocr_run(img: np.ndarray, conf_th: float = 0.35) -> str:
                 parts.append(txt)
 
     # PaddleOCR은 파편들을 붙여주는 편이 OCR에 유리한 경우가 많음
-    merged = _normalize_text("".join(parts))
+    merged = _normalize_text(" ".join(parts))
     return merged
 
 

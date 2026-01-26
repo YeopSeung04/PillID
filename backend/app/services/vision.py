@@ -135,28 +135,45 @@ def _shape_from_contour(bgr_roi: np.ndarray, debug_dir: Optional[str], prefix: s
 
 
 def _color_from_roi(bgr_roi: np.ndarray) -> str:
-    """
-    ROI 평균 색 기반으로 대략적인 색 라벨 추정.
-    (두 톤 캡슐은 '주요 색(면적 큰 쪽)'으로 잡음)
-    """
     roi = _resize_max(bgr_roi, 900)
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    # 채도 낮고 명도 높으면 흰색 계열
+    # 알약 픽셀만 남기기: 채도/명도 기반 마스크
     H, S, V = cv2.split(hsv)
-    s_mean = float(np.mean(S))
-    v_mean = float(np.mean(V))
 
-    # 하양(흰 캡슐) 우선
-    if s_mean < 40 and v_mean > 170:
+    # 너무 어둡거나(그림자) 너무 채도 높은 배경(격자) 일부를 배제
+    mask = (V > 60).astype(np.uint8) * 255
+
+    # 흰색(채도 낮음)도 포함해야 하니까 S로 너무 강하게 거르면 안 됨
+    # 대신 '파란 격자'는 H가 85~140에 많이 몰림 -> 그 구간을 약하게 제외
+    blue_bg = ((H >= 85) & (H <= 140) & (S > 40)).astype(np.uint8) * 255
+    mask = cv2.bitwise_and(mask, cv2.bitwise_not(blue_bg))
+
+    # 마스크 정리
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=2)
+
+    # 마스크가 너무 작으면 fallback
+    if cv2.countNonZero(mask) < 500:
+        mask = np.ones_like(mask) * 255
+
+    # 마스크 영역 평균 계산
+    h_vals = H[mask > 0]
+    s_vals = S[mask > 0]
+    v_vals = V[mask > 0]
+
+    s_mean = float(np.mean(s_vals))
+    v_mean = float(np.mean(v_vals))
+
+    # 흰색 판정 (흰 반쪽 때문에 필요)
+    if s_mean < 45 and v_mean > 170:
         return "하양"
 
-    # 붉/주황 계열 판단: Hue가 0 근처 또는 160 이상(빨강), 5~25(주황/노랑)
-    h_mean = float(np.mean(H))
-    if (h_mean < 10) or (h_mean > 160):
-        # 빨강/주황은 채도가 높게 나오는 편
-        return "주황" if s_mean < 120 else "빨강"
+    h_mean = float(np.mean(h_vals))
 
+    if (h_mean < 10) or (h_mean > 160):
+        return "빨강" if s_mean >= 120 else "주황"
     if 10 <= h_mean < 30:
         return "주황"
     if 30 <= h_mean < 45:
@@ -165,8 +182,8 @@ def _color_from_roi(bgr_roi: np.ndarray) -> str:
         return "연두"
     if 85 <= h_mean < 140:
         return "파랑"
-
     return "기타"
+
 
 
 def guess_shape_color(
@@ -197,5 +214,97 @@ def guess_shape_color(
         _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_roi.png"), roi)
 
     shape = _shape_from_contour(roi, debug_dir, debug_prefix)
-    color = _color_from_roi(roi)
+    k = 2 if shape in ("타원형", "장방형") else 1
+    colors = _dominant_colors(roi, debug_dir, debug_prefix, k=k)
+    color = "+".join(colors) # "하양+주황" 같은 형태
     return shape, color
+
+def _label_color_from_hsv(h: float, s: float, v: float) -> str:
+    if s < 45 and v > 170:
+        return "하양"
+    if v < 60:
+        return "기타"
+
+    # OpenCV H: 0~179
+    if (h < 10) or (h > 160):
+        return "빨강" if s >= 120 else "주황"
+    if 10 <= h < 30:
+        return "주황"
+    if 30 <= h < 45:
+        return "노랑"
+    if 45 <= h < 85:
+        return "연두"
+    if 85 <= h < 140:
+        return "파랑"
+    return "기타"
+
+def _pill_silhouette_mask(bgr_roi: np.ndarray, debug_dir: Optional[str]=None, prefix: str="vision") -> np.ndarray:
+    roi = _resize_max(bgr_roi, 900)
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # 밝은 배경(격자)에서 알약이 더 어둡게 잡히는 경우가 많아서 INV+OTSU가 보통 유리
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k, iterations=2)
+    th = cv2.morphologyEx(th, cv2.MORPH_OPEN, k, iterations=1)
+
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = np.zeros_like(th)
+
+    if cnts:
+        c = max(cnts, key=cv2.contourArea)
+        cv2.drawContours(mask, [c], -1, 255, thickness=-1)
+    else:
+        mask[:] = 255
+
+    if debug_dir:
+        _safe_imwrite(os.path.join(debug_dir, f"{prefix}_pillmask.png"), mask)
+
+    return mask
+
+def _dominant_colors(bgr_roi: np.ndarray, debug_dir: Optional[str]=None, prefix: str="vision", k: int=2) -> list[str]:
+    roi = _resize_max(bgr_roi, 900)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    H, S, V = cv2.split(hsv)
+
+    mask = _pill_silhouette_mask(roi, debug_dir, prefix)
+
+    ys, xs = np.where(mask > 0)
+    if len(xs) < 500:
+        # 마스크 실패 시 fallback: ROI 중앙부라도 사용
+        y0, y1 = int(roi.shape[0]*0.25), int(roi.shape[0]*0.75)
+        x0, x1 = int(roi.shape[1]*0.25), int(roi.shape[1]*0.75)
+        sub = hsv[y0:y1, x0:x1].reshape(-1, 3).astype(np.float32)
+    else:
+        sub = hsv[ys, xs].reshape(-1, 3).astype(np.float32)
+
+    # 다운샘플(속도/안정)
+    if sub.shape[0] > 6000:
+        idx = np.random.choice(sub.shape[0], 6000, replace=False)
+        sub = sub[idx]
+
+    K = max(1, int(k))
+    if K == 1:
+        h, s, v = np.mean(sub, axis=0)
+        return [_label_color_from_hsv(float(h), float(s), float(v))]
+
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1.0)
+    _, labels, centers = cv2.kmeans(sub, K, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
+    labels = labels.flatten()
+    counts = np.bincount(labels, minlength=K)
+    order = np.argsort(counts)[::-1]
+
+    out = []
+    for i in order:
+        h, s, v = centers[i]
+        out.append(_label_color_from_hsv(float(h), float(s), float(v)))
+
+    # 중복 제거
+    uniq = []
+    for c in out:
+        if c not in uniq:
+            uniq.append(c)
+
+    return uniq[:K]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Set
+from typing import Optional, Set, List
 
 
 def match_level(score: int) -> str:
@@ -13,46 +13,36 @@ def match_level(score: int) -> str:
     return "LOW"
 
 
-# ----------------------------
-# Normalization / Tokenization
-# ----------------------------
-
-_TOKEN_RE = re.compile(r"[A-Z0-9\-]{2,}")
-
-
 def _norm(s: Optional[str]) -> str:
     return (s or "").upper().strip()
 
 
-def _tokens_list(s: str) -> list[str]:
-    """원본 문자열에서 토큰 리스트(순서 유지)가 필요할 때."""
-    return _TOKEN_RE.findall(_norm(s))
+# 토큰: A-Z/0-9/하이픈, 길이 2+
+_TOKEN_RE = re.compile(r"[A-Z0-9\-]{2,}")
+
+
+def _tokens(s: str) -> List[str]:
+    """외부(main.py)에서도 쓸 토큰화 함수."""
+    toks = _TOKEN_RE.findall(_norm(s))
+    out = []
+    for t in toks:
+        # "-W" 같은 쓰레기 토큰 제거
+        if t.startswith("-") or t.endswith("-"):
+            continue
+        out.append(t)
+    return out
 
 
 def _tokens_set(s: str) -> Set[str]:
-    """토큰 집합(매칭용)."""
-    return set(_tokens_list(s))
+    return set(_tokens(s))
 
 
 def _tok_variants(t: str) -> Set[str]:
-    """
-    OCR 토큰 변형 흡수:
-    - D-W <-> DW
-    - 기타 하이픈 제거 버전
-    """
     t = _norm(t)
-    if not t:
-        return set()
     return {t, t.replace("-", "")}
 
 
 def _tok_weight(t: str) -> int:
-    """
-    토큰별 가중치.
-    - D-W / DW: 강함
-    - PAC: 강함
-    - 나머지: 중간
-    """
     t0 = _norm(t)
     t0_no = t0.replace("-", "")
     if t0 in ("D-W", "DW") or t0_no == "DW":
@@ -62,16 +52,18 @@ def _tok_weight(t: str) -> int:
     return 35
 
 
-# ----------------------------
-# Color/Shape helpers
-# ----------------------------
-
-def _color_aliases(color: Optional[str]) -> Set[str]:
-    if not color:
+def _split_color_guess(color_guess: Optional[str]) -> Set[str]:
+    """
+    "빨강+파랑" / "빨강,파랑" / "빨강 파랑" 등을 set으로.
+    """
+    if not color_guess:
         return set()
-    c = color.strip()
+    parts = re.split(r"[+,/ ]+", color_guess.strip())
+    return {p.strip() for p in parts if p.strip()}
 
-    # 표기 흔들림 흡수
+
+def _color_aliases_one(c: str) -> Set[str]:
+    c = c.strip()
     if c == "주황":
         return {"주황", "주황색", "연주황", "적주황"}
     if c == "빨강":
@@ -84,15 +76,30 @@ def _color_aliases(color: Optional[str]) -> Set[str]:
         return {"노랑", "황색", "노란"}
     if c == "연두":
         return {"연두", "녹색", "초록", "초록색"}
-
     return {c}
+
+
+def _item_has_color(it: dict, color_guess: Optional[str]) -> bool:
+    if not color_guess:
+        return False
+
+    parts = _split_color_guess(color_guess)
+    if not parts:
+        return False
+
+    allowed: Set[str] = set()
+    for p in parts:
+        allowed |= _color_aliases_one(p)
+
+    c1 = str(it.get("COLOR_CLASS1") or "").strip()
+    c2 = str(it.get("COLOR_CLASS2") or "").strip()
+    return (c1 in allowed) or (c2 in allowed)
 
 
 def _shape_aliases(shape: Optional[str]) -> Set[str]:
     if not shape:
         return set()
     s = shape.strip()
-    # MFDS에서 캡슐은 타원형/장방형이 섞여 들어오는 경우가 많음
     if s == "타원형":
         return {"타원형", "장방형"}
     if s == "장방형":
@@ -100,80 +107,45 @@ def _shape_aliases(shape: Optional[str]) -> Set[str]:
     return {s}
 
 
-def _item_has_color(it: dict, guess: Optional[str]) -> bool:
-    if not guess:
+def _item_has_shape(it: dict, shape_guess: Optional[str]) -> bool:
+    if not shape_guess:
         return False
-    colors = _color_aliases(guess)
-    if not colors:
-        return False
-
-    c1 = str(it.get("COLOR_CLASS1") or "").strip()
-    c2 = str(it.get("COLOR_CLASS2") or "").strip()
-    return (c1 in colors) or (c2 in colors)
-
-
-def _item_has_shape(it: dict, guess: Optional[str]) -> bool:
-    if not guess:
-        return False
-    shapes = _shape_aliases(guess)
-    if not shapes:
-        return False
-
+    shapes = _shape_aliases(shape_guess)
     s = str(it.get("DRUG_SHAPE") or "").strip()
     return s in shapes
 
 
-# ----------------------------
-# Main scoring
-# ----------------------------
-
 def score_candidate(
     it: dict,
     imprint: str,
-    color_guess: Optional[str] = None,
-    shape_guess: Optional[str] = None,
+    color_guess: Optional[str],
+    shape_guess: Optional[str],
+    is_capsule: bool = False,
 ) -> int:
-    """
-    스코어링 정책(실전용, 과하게 죽이지 않기):
-    1) 각인 토큰 매칭이 핵심 (PRINT_FRONT/PRINT_BACK 토큰 집합과 교집합)
-       - 토큰별 가중치 적용 (D-W/DW, PAC 우선)
-       - 하이픈 제거 변형 허용
-    2) 색/모양은 '가점'만 (프리필터로도 쓰되, 스코어에서도 보조 신호로 약하게)
-       - MFDS는 COLOR_CLASS1/2가 있으니 둘 다 비교
-       - shape는 타원형/장방형 alias 허용
-    """
     target = _norm(imprint)
     if not target:
         return 0
 
-    # 후보 아이템 각인 토큰 집합 (부분문자열 오탐 방지)
     p_front = _norm(it.get("PRINT_FRONT"))
     p_back = _norm(it.get("PRINT_BACK"))
     p_toks = _tokens_set(p_front) | _tokens_set(p_back)
-    if not p_toks:
-        # 각인 데이터가 없는 품목은 기본적으로 불리
-        # (단, 색/모양만으로도 후보를 열어두고 싶으면 0 리턴하지 말고 아주 작은 점수를 줄 수도 있음)
-        p_toks = set()
 
     score = 0
 
-    # 입력 각인 토큰(순서 유지)
-    toks = _tokens_list(target)
-
-    # 토큰별 매칭 (하이픈 변형 포함)
-    for t in toks:
+    # 1) 각인 토큰 매칭 (핵심)
+    for t in _tokens(target):
         variants = _tok_variants(t)
-        if not variants:
-            continue
-
-        # token-set 교집합 매칭
         if variants & p_toks:
             score += _tok_weight(t)
 
-    # 색/모양 가점 (너무 강하게 하면 비전 오판에 끌려감)
+    # 2) shape/color는 보조 가점만 (비전 오판에 끌려가지 않도록 약하게)
     if _item_has_shape(it, shape_guess):
         score += 8
     if _item_has_color(it, color_guess):
         score += 8
+
+    # 3) 캡슐이면 약간 가점 (특히 타원형/장방형에서 도움)
+    if is_capsule:
+        score += 15
 
     return score

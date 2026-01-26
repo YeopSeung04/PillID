@@ -16,6 +16,20 @@ _OCR = PaddleOCR(
 )
 
 
+# 기존 extract_imprint_text(...)를 그대로 재사용
+def extract_imprint_text_roi(
+    bgr_roi: np.ndarray,
+    debug_dir: Optional[str] = None,
+    debug_prefix: Optional[str] = None,
+) -> str:
+    """
+    ROI 단위 OCR.
+    내부적으로 기존 extract_imprint_text를 그대로 호출.
+    """
+    return extract_imprint_text(bgr_roi, debug_dir=debug_dir, debug_prefix=debug_prefix)
+
+
+
 def _normalize_text(s: str) -> str:
     if not s:
         return ""
@@ -93,7 +107,6 @@ def _prep_red_emphasis(bgr: np.ndarray) -> np.ndarray:
     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
     return clahe.apply(red)
 
-
 def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
     OCR용 ROI: 알약 덩어리만 잡기.
@@ -154,6 +167,48 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
         out.append((X, Y, X2 - X, Y2 - Y))
 
     return out
+
+# app/services/ocr.py 하단에 추가
+
+def extract_imprint_text_roi(
+    roi_bgr: np.ndarray,
+    debug_dir: Optional[str] = None,
+    debug_prefix: Optional[str] = None,
+) -> str:
+    """
+    단일 ROI에서만 OCR 수행 (다중 알약 섞임 방지)
+    """
+    crop = _crop_center_band(roi_bgr)
+
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_roi.png"), crop)
+
+    # 1) 컬러
+    t = _ocr_run(crop)
+    if t:
+        return t
+
+    # 2) upsharp
+    ug = _prep_upsharp_gray(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_upsharp.png"), ug)
+    t = _ocr_run(ug)
+    if t:
+        return t
+
+    # 3) clahe
+    g = _prep_gray_clahe(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_clahe.png"), g)
+    t = _ocr_run(g)
+    if t:
+        return t
+
+    # 4) red
+    r = _prep_red_emphasis(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_red.png"), r)
+    return _ocr_run(r)
 
 
 def extract_imprint_text(

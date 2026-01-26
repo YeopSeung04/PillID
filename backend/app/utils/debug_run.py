@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import os
-import secrets
+import uuid
 from datetime import datetime
 
 
 def make_run_dir(base_dir: str = "debug_runs") -> str:
     """
-    요청(실행) 1회당 폴더 1개 생성
-    예: debug_runs/20260127_034119_68df69
+    debug_runs/YYYYMMDD_HHMMSS_xxxxxx 형태로 폴더 생성 후 경로 반환.
     """
     os.makedirs(base_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    rid = secrets.token_hex(3)  # 6 chars
-    run_dir = os.path.join(base_dir, f"{ts}_{rid}")
+    suf = uuid.uuid4().hex[:6]
+    run_dir = os.path.join(base_dir, f"{ts}_{suf}")
     os.makedirs(run_dir, exist_ok=True)
-    return run_dir
+    return run_dir.replace("\\", "/")

@@ -57,5 +57,15 @@ class MFDSCache:
         finally:
             self.loading = False
 
+        self.print_index = {}
+
+        for i, it in enumerate(self.items):
+            for k in ("PRINT_FRONT", "PRINT_BACK"):
+                val = it.get(k)
+                if not val:
+                    continue
+                for tok in re.findall(r"[A-Z0-9\-]{2,}", val.upper()):
+                    self.print_index.setdefault(tok.replace("-", ""), []).append(i)
+
 
 mfds_cache = MFDSCache()

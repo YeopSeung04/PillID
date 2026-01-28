@@ -58,14 +58,12 @@ def _ocr_run(img: np.ndarray, conf_th: float = 0.35) -> str:
             if txt and conf >= conf_th:
                 parts.append(txt)
 
-    # PaddleOCR은 파편들을 붙여주는 편이 OCR에 유리한 경우가 많음
-    merged = _normalize_text(" ".join(parts))
-    return merged
+    return _normalize_text(" ".join(parts))
 
 
 def _crop_center_band(bgr: np.ndarray) -> np.ndarray:
     """
-    눈금/워터마크 방지: 중앙 밴드만 사용
+    중앙 밴드만 사용: 반사/워터마크/배경 영향 줄이기
     """
     h, w = bgr.shape[:2]
     y1 = int(h * 0.10)
@@ -87,6 +85,9 @@ def _prep_upsharp_gray(bgr: np.ndarray) -> np.ndarray:
 
 
 def _prep_red_emphasis(bgr: np.ndarray) -> np.ndarray:
+    """
+    붉은/갈색 계열 각인 강조용(일부 캡슐에서 먹힘)
+    """
     b, g, r = cv2.split(bgr)
     red = cv2.subtract(r, g)
     red = cv2.GaussianBlur(red, (3, 3), 0)
@@ -94,9 +95,32 @@ def _prep_red_emphasis(bgr: np.ndarray) -> np.ndarray:
     return clahe.apply(red)
 
 
+<<<<<<< Updated upstream
+=======
+def _prep_deboss_edges(bgr: np.ndarray) -> np.ndarray:
+    """
+    ✅ 음각/엠보싱(흰 알약 RX 같은) 전용 전처리:
+    CLAHE + Sobel magnitude로 '경계'를 살려서 OCR에 넣는다.
+    """
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
+    g = clahe.apply(g)
+
+    sx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(sx, sy)
+    mag = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    # Otsu threshold
+    _, th = cv2.threshold(mag, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return th
+
+
+>>>>>>> Stashed changes
 def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
-    OCR용 ROI: 알약 덩어리만 잡기.
+    (fallback용) OCR에서만 쓰는 간단 ROI: 알약 덩어리 찾기.
+    ※ 메인 파이프라인에선 vision.py가 ROI를 이미 주니까 이건 거의 안 쓰게 됨.
     """
     img = _resize_max(bgr, 1800)
     H, W = img.shape[:2]
@@ -119,20 +143,15 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
         x, y, w, h = cv2.boundingRect(c)
         ar = w / float(h + 1e-6)
 
-        if ar < 1.2 or ar > 6.5:
+        if ar < 1.1 or ar > 7.0:
             continue
-        if w < 140 or h < 70:
-            continue
-
-        if y < int(0.18 * H):
-            continue
-        if y > int(0.90 * H):
+        if w < 120 or h < 60:
             continue
 
         boxes.append((x, y, w, h))
 
     boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
-    boxes = boxes[:2]
+    boxes = boxes[:3]
 
     # 원본 스케일 복원
     h0, w0 = bgr.shape[:2]
@@ -155,6 +174,70 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
 
     return out
 
+<<<<<<< Updated upstream
+=======
+
+def extract_imprint_text_roi(
+    roi_bgr: np.ndarray,
+    debug_dir: Optional[str] = None,
+    debug_prefix: Optional[str] = None,
+) -> str:
+    """
+    ✅ 단일 ROI 전용 OCR
+    - color -> upsharp(gray) -> clahe(gray) -> red -> deboss(edge) -> deboss(invert)
+    """
+    if roi_bgr is None or roi_bgr.size == 0:
+        return ""
+
+    crop = _crop_center_band(roi_bgr)
+
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_roi.png"), crop)
+
+    # 1) 컬러
+    t = _ocr_run(crop)
+    if t:
+        return t
+
+    # 2) upsharp gray
+    ug = _prep_upsharp_gray(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_upsharp.png"), ug)
+    t = _ocr_run(ug)
+    if t:
+        return t
+
+    # 3) clahe gray
+    g = _prep_gray_clahe(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_clahe.png"), g)
+    t = _ocr_run(g)
+    if t:
+        return t
+
+    # 4) red emphasis
+    r = _prep_red_emphasis(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_red.png"), r)
+    t = _ocr_run(r)
+    if t:
+        return t
+
+    # 5) deboss/emboss edges
+    d = _prep_deboss_edges(crop)
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_deboss.png"), d)
+    t = _ocr_run(d)
+    if t:
+        return t
+
+    # 6) deboss invert (케이스에 따라 글자 대비가 반대)
+    di = 255 - d
+    if debug_dir and debug_prefix:
+        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_deboss_inv.png"), di)
+    return _ocr_run(di)
+
+>>>>>>> Stashed changes
 
 def extract_imprint_text(
     bgr: np.ndarray,
@@ -162,94 +245,27 @@ def extract_imprint_text(
     debug_prefix: Optional[str] = None,
 ) -> str:
     """
-    전략:
-    1) 알약 ROI 찾기
-    2) ROI마다 원본 컬러 -> upsharp(gray) -> gray+clahe -> red 강조 순으로 OCR
-    3) debug_dir 있으면 전부 해당 폴더에 저장
+    (legacy) 전체 이미지에서 OCR하려는 경우.
+    지금 메인 파이프라인에선 vision이 ROI를 주니까 거의 안 써도 됨.
     """
     if bgr is None or bgr.size == 0:
         return ""
 
     rois = _find_pill_rois(bgr)
 
-    def _p(name: str) -> Optional[str]:
-        if not (debug_dir and debug_prefix):
-            return None
-        return os.path.join(debug_dir, f"{debug_prefix}_{name}.png")
-
     # ROI 못 잡으면 fallback (중앙 밴드)
     if not rois:
-        crop = _crop_center_band(bgr)
-        p = _p("roi_fallback")
-        if p:
-            _safe_imwrite(p, crop)
-
-        t = _ocr_run(crop)
-        if t:
-            return t
-
-        ug = _prep_upsharp_gray(crop)
-        p = _p("prep_upsharp_fallback")
-        if p:
-            _safe_imwrite(p, ug)
-        t = _ocr_run(ug)
-        if t:
-            return t
-
-        g = _prep_gray_clahe(crop)
-        p = _p("prep_clahe_fallback")
-        if p:
-            _safe_imwrite(p, g)
-        t = _ocr_run(g)
-        if t:
-            return t
-
-        r = _prep_red_emphasis(crop)
-        p = _p("prep_red_fallback")
-        if p:
-            _safe_imwrite(p, r)
-        return _ocr_run(r)
+        return extract_imprint_text_roi(bgr, debug_dir=debug_dir, debug_prefix=f"{debug_prefix}_fallback" if debug_prefix else None)
 
     results: List[str] = []
-
     for i, (x, y, w, h) in enumerate(rois, start=1):
-        crop0 = bgr[y : y + h, x : x + w]
-        crop0 = _crop_center_band(crop0)
-
-        if debug_dir and debug_prefix:
-            _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_roi_pill{i}.png"), crop0)
-
-        # 1) 원본 컬러
-        t1 = _ocr_run(crop0)
-        if t1:
-            results.append(t1)
-            continue
-
-        # 2) upsharp(gray)
-        ug = _prep_upsharp_gray(crop0)
-        if debug_dir and debug_prefix:
-            _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_prep_upsharp_pill{i}.png"), ug)
-        t2 = _ocr_run(ug)
-        if t2:
-            results.append(t2)
-            continue
-
-        # 3) gray+clahe
-        g = _prep_gray_clahe(crop0)
-        if debug_dir and debug_prefix:
-            _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_prep_clahe_pill{i}.png"), g)
-        t3 = _ocr_run(g)
-        if t3:
-            results.append(t3)
-            continue
-
-        # 4) red emphasis
-        r = _prep_red_emphasis(crop0)
-        if debug_dir and debug_prefix:
-            _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_prep_red_pill{i}.png"), r)
-        t4 = _ocr_run(r)
-        if t4:
-            results.append(t4)
-            continue
+        crop0 = bgr[y:y + h, x:x + w]
+        t = extract_imprint_text_roi(
+            crop0,
+            debug_dir=debug_dir,
+            debug_prefix=f"{debug_prefix}_pill{i}" if debug_prefix else None,
+        )
+        if t:
+            results.append(t)
 
     return _normalize_text(" ".join(results))

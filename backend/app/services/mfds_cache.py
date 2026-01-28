@@ -3,12 +3,30 @@ from __future__ import annotations
 
 import time, re
 from typing import List, Dict, Any, Optional
-
-from app.services.pill_db import fetch_pill_page
 from collections import defaultdict
 
+from app.services.pill_db import fetch_pill_page
+
+_TOK_RE = re.compile(r"[A-Z0-9\-]{2,}")
+
+
 def _tok(s: str) -> list[str]:
-    return re.findall(r"[A-Z0-9\-]{2,}", (s or "").upper())
+    return _TOK_RE.findall((s or "").upper())
+
+
+def _norm_tok(t: str) -> str:
+    """Normalize token for indexing / lookup."""
+    return (t or "").upper().replace("-", "").strip()
+
+
+def _iter_print_tokens(it: Dict[str, Any]) -> List[str]:
+    """Extract imprint tokens from MFDS item (front+back)."""
+    p = f"{it.get('PRINT_FRONT') or ''} {it.get('PRINT_BACK') or ''}".strip()
+    if not p:
+        return []
+    # stable unique
+    return list(dict.fromkeys(_tok(p)))
+
 
 class MFDSCache:
     def __init__(self):
@@ -44,12 +62,15 @@ class MFDSCache:
                 print(f"[MFDS] loading... {p}/{pages} pages | items={len(all_items)}", flush=True)
 
             self.items = all_items
-            # 인덱스 구축
+
+            # ✅ 인덱스 구축: 토큰 원형/정규화(하이픈 제거) 둘 다 저장
             self.print_index.clear()
             for i, it in enumerate(self.items):
-                p = (it.get("PRINT_FRONT") or "") + " " + (it.get("PRINT_BACK") or "")
-                for t in set(_tok(p)):
+                for t in _iter_print_tokens(it):
                     self.print_index[t].append(i)
+                    nt = _norm_tok(t)
+                    if nt and nt != t:
+                        self.print_index[nt].append(i)
 
             self.loaded_at = time.time()
             dt = self.loaded_at - t0
@@ -57,5 +78,14 @@ class MFDSCache:
         finally:
             self.loading = False
 
+<<<<<<< Updated upstream
+=======
+        # defaultdict(list) 유지(호환)
+        if not isinstance(self.print_index, defaultdict):
+            tmp = defaultdict(list)
+            tmp.update(self.print_index)
+            self.print_index = tmp
+
+>>>>>>> Stashed changes
 
 mfds_cache = MFDSCache()

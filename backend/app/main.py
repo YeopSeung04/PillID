@@ -63,6 +63,37 @@ def _post_fix_imprint(imprint: str) -> str:
     return s
 
 
+def _gen_ocr_variants(imprint: str) -> list[str]:
+    """Generate a small set of robust OCR variants (for seeding only)."""
+    s = (imprint or "").upper().strip()
+    if not s:
+        return []
+
+    # normalize spaces
+    s = re.sub(r"\s+", " ", s)
+
+    # common confusions
+    swaps = [
+        ("0", "O"), ("O", "0"),
+        ("1", "I"), ("I", "1"),
+        ("5", "S"), ("S", "5"),
+        ("2", "Z"), ("Z", "2"),
+        ("8", "B"), ("B", "8"),
+    ]
+
+    out: set[str] = {s, s.replace("-", ""), s.replace(" ", "")}
+    for a, b in swaps:
+        if a in s:
+            out.add(s.replace(a, b))
+        if a in s.replace("-", ""):
+            out.add(s.replace("-", "").replace(a, b))
+
+    # keep size small / deterministic
+    ret = [x for x in out if x]
+    ret.sort(key=lambda x: (len(x), x))
+    return ret[:12]
+
+
 def _shape_aliases(shape: str | None) -> set[str]:
     if not shape:
         return set()
@@ -198,14 +229,28 @@ async def identify(file: UploadFile = File(...)):
     im_l = extract_imprint_text(left, debug_dir=run_dir, debug_prefix="left")
     im_r = extract_imprint_text(right, debug_dir=run_dir, debug_prefix="right")
 
+<<<<<<< Updated upstream
     imprint = _merge_tokens(im_full, im_l, im_r)
     imprint = _post_fix_imprint(imprint)
+=======
+    # -------------------------
+    # 2) ROI별 식별
+    # -------------------------
+    for idx, info in enumerate(rois_info, start=1):
+        x, y, w, h = info["roi"]
+        roi_img_raw = bgr[y:y + h, x:x + w]
+        # vision.py가 회전/정규화된 ROI를 제공하면 OCR에는 그걸 우선 사용
+        roi_img = info.get("roi_img", None)
+        if roi_img is None:
+            roi_img = roi_img_raw
+>>>>>>> Stashed changes
 
     print("[DEBUG] im_full =", repr(im_full))
     print("[DEBUG] im_l    =", repr(im_l))
     print("[DEBUG] im_r    =", repr(im_r))
     print("[DEBUG] imprint =", repr(imprint))
 
+<<<<<<< Updated upstream
     if not imprint:
         return IdentifyResponse(
             ocr_text="",
@@ -214,6 +259,55 @@ async def identify(file: UploadFile = File(...)):
             shape_guess=shape_guess,
             candidates=[],
             note="각인(OCR) 인식에 실패했습니다. 각인이 보이도록 정면에서 더 선명하게 촬영하세요.",
+=======
+        imprint_raw = extract_imprint_text_roi(
+            roi_img,
+            debug_dir=run_dir,
+            debug_prefix=f"pill{idx}",
+        )
+        imprint = _post_fix_imprint(imprint_raw)
+
+        ocr_variants = _gen_ocr_variants(imprint)
+
+        if not imprint:
+            pills.append(
+                PillResult(
+                    roi_index=idx,
+                    roi=(x, y, w, h),
+                    ocr_text="",
+                    ocr_variants=ocr_variants,
+                    color_guess=color_guess,
+                    shape_guess=shape_guess,
+                    is_capsule=is_capsule,
+                    candidates=[],
+                    note="OCR 실패",
+                )
+            )
+            continue
+
+        # ✅ seed는 OCR 원문 + variants를 모두 사용
+        toks = set()
+        for s in [imprint] + ocr_variants:
+            toks.update(_tokens(s))
+        toks = sorted(toks)
+
+        # 2-1) seed from print_index (mfds_cache에서 원형/정규화 둘 다 인덱싱됨)
+        candidate_idx = set()
+        for t in toks:
+            for i in mfds_cache.print_index.get(t, []):
+                candidate_idx.add(i)
+
+        items_seed = [mfds_cache.items[i] for i in candidate_idx] if candidate_idx else mfds_cache.items
+
+        # 2-2) prefilter
+        filtered, mode = _prefilter_items(items_seed, shape_guess, color_guess)
+
+        print(
+            f"[DEBUG] roi={idx} seed={len(candidate_idx) if candidate_idx else 'ALL'} | "
+            f"prefilter({mode}): seed={len(items_seed)} -> filtered={len(filtered)} | "
+            f"shape={shape_guess} color={color_guess} is_capsule={is_capsule} toks={toks}",
+            flush=True
+>>>>>>> Stashed changes
         )
 
     if not mfds_cache.is_ready():
@@ -287,6 +381,38 @@ async def identify(file: UploadFile = File(...)):
                 color=str(it.get("COLOR_CLASS1")) if it.get("COLOR_CLASS1") else None,
                 shape=str(it.get("DRUG_SHAPE")) if it.get("DRUG_SHAPE") else None,
             )
+<<<<<<< Updated upstream
+=======
+            for s, it in top
+        ]
+
+        pills.append(
+            PillResult(
+                roi_index=idx,
+                roi=(x, y, w, h),
+                ocr_text=imprint,
+                ocr_variants=ocr_variants,
+                color_guess=color_guess,
+                shape_guess=shape_guess,
+                is_capsule=is_capsule,
+                candidates=candidates,
+                note=f"prefilter={mode}, seed={len(candidate_idx) if candidate_idx else 'ALL'}",
+            )
+        )
+
+    # -------------------------
+    # 3) best 1개 선정 (하위호환)
+    # -------------------------
+    def _best_score(p: PillResult) -> int:
+        return int(p.candidates[0].score) if p.candidates else -1
+
+    best = max(pills, key=_best_score) if pills else None
+
+    if not best or not best.candidates:
+        return IdentifyResponse(
+            pills=pills,
+            note="각인은 인식했지만 매칭 후보를 찾지 못했습니다. 각인을 더 크게/선명하게 찍어 다시 시도하세요.",
+>>>>>>> Stashed changes
         )
 
     return IdentifyResponse(

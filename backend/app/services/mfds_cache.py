@@ -79,7 +79,10 @@ class MFDSCache:
             self.loading = False
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
         # defaultdict(list) 유지(호환)
         if not isinstance(self.print_index, defaultdict):
             tmp = defaultdict(list)

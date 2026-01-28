@@ -146,12 +146,16 @@ def _resize_max(bgr: np.ndarray, max_side: int = 1400) -> np.ndarray:
 
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
     알약 ROI만 찾기 (격자/눈금 영역 최대한 제외).
     - 엣지 기반 큰 외곽 물체(알약) 탐지
     - 상단 눈금 영역/하단 워터마크 영역 제거
     """
+=======
+# def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
+>>>>>>> Stashed changes
 =======
 # def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
 >>>>>>> Stashed changes
@@ -192,7 +196,11 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
 
     boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     boxes = boxes[:2]
+=======
+    boxes = boxes[:4]
+>>>>>>> Stashed changes
 =======
     boxes = boxes[:4]
 >>>>>>> Stashed changes
@@ -216,6 +224,7 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
         Y2 = min(h0, Y + H0 + 2 * pad)
         out.append((X, Y, X2 - X, Y2 - Y))
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
     return out
 
@@ -253,11 +262,22 @@ def _shape_from_mask(mask: np.ndarray) -> str:
     if not cnts:
         return "타원형"
 >>>>>>> Stashed changes
+=======
+    out.sort(key=lambda r: r[0])
+    return out
+
+
+def _shape_from_mask(mask: np.ndarray) -> str:
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return "타원형"
+>>>>>>> Stashed changes
     c = max(cnts, key=cv2.contourArea)
     area = float(cv2.contourArea(c))
     x, y, w, h = cv2.boundingRect(c)
     ar = w / float(h + 1e-6)
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
     # 디버그 컨투어
     if debug_dir:
@@ -268,14 +288,24 @@ def _shape_from_mask(mask: np.ndarray) -> str:
     peri = float(cv2.arcLength(c, True))
     circ = (4.0 * np.pi * area / (peri * peri + 1e-6)) if peri > 0 else 0.0
 >>>>>>> Stashed changes
+=======
+    peri = float(cv2.arcLength(c, True))
+    circ = (4.0 * np.pi * area / (peri * peri + 1e-6)) if peri > 0 else 0.0
+>>>>>>> Stashed changes
 
     # 캡슐: 타원형/장방형이 MFDS에 혼재
     # ar이 크면 장방형 쪽, 아니면 타원형 쪽
     if ar >= 2.2:
         return "장방형"
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     if 1.3 <= ar < 2.2:
         return "타원형"
+=======
+    if (ar < 1.25) and (circ >= 0.72):
+        return "원형"
+    return "타원형"
+>>>>>>> Stashed changes
 
     # 거의 정원형
     return "원형"
@@ -399,14 +429,22 @@ def _pill_silhouette_mask(bgr_roi: np.ndarray, debug_dir: Optional[str] = None, 
     - Otsu THRESH_BINARY / THRESH_BINARY_INV 둘 다 만들고
     - "center는 pill, border는 background" 기준으로 더 좋은 쪽 선택
     """
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
     roi = _resize_max(bgr_roi, 900)
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     # 밝은 배경(격자)에서 알약이 더 어둡게 잡히는 경우가 많아서 INV+OTSU가 보통 유리
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+=======
+    _, th_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, th_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+>>>>>>> Stashed changes
 =======
     _, th_bin = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     _, th_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -448,8 +486,11 @@ def _pill_silhouette_mask(bgr_roi: np.ndarray, debug_dir: Optional[str] = None, 
     return mask
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 def _dominant_colors(bgr_roi: np.ndarray, debug_dir: Optional[str]=None, prefix: str="vision", k: int=2) -> list[str]:
 =======
+=======
+>>>>>>> Stashed changes
 def _dominant_colors_capsule_halves(bgr_roi: np.ndarray, mask: np.ndarray) -> List[str]:
     hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
     h, w = mask.shape[:2]

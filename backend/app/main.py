@@ -243,6 +243,9 @@ async def identify(file: UploadFile = File(...)):
         roi_img = info.get("roi_img", None)
         if roi_img is None:
             roi_img = roi_img_raw
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 
     print("[DEBUG] im_full =", repr(im_full))

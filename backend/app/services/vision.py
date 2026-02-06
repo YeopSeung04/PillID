@@ -176,7 +176,6 @@ def _shape_from_mask(mask: np.ndarray) -> str:
 
 
 def _label_color_from_hsv(h, s, v) -> str:
-    def _me_:
 
     if s < 45 and v > 170:
         return "하양"

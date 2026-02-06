@@ -95,11 +95,6 @@ def _prep_red_emphasis(bgr: np.ndarray) -> np.ndarray:
     return clahe.apply(red)
 
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
 def _prep_deboss_edges(bgr: np.ndarray) -> np.ndarray:
     """
     ✅ 음각/엠보싱(흰 알약 RX 같은) 전용 전처리:
@@ -119,10 +114,6 @@ def _prep_deboss_edges(bgr: np.ndarray) -> np.ndarray:
     return th
 
 
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """
     (fallback용) OCR에서만 쓰는 간단 ROI: 알약 덩어리 찾기.
@@ -180,11 +171,6 @@ def _find_pill_rois(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
 
     return out
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
 
 def extract_imprint_text_roi(
     roi_bgr: np.ndarray,
@@ -231,23 +217,6 @@ def extract_imprint_text_roi(
     t = _ocr_run(r)
     if t:
         return t
-<<<<<<< Updated upstream
-=======
-
-    # 5) deboss/emboss edges
-    d = _prep_deboss_edges(crop)
-    if debug_dir and debug_prefix:
-        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_deboss.png"), d)
-    t = _ocr_run(d)
-    if t:
-        return t
-
-    # 6) deboss invert (케이스에 따라 글자 대비가 반대)
-    di = 255 - d
-    if debug_dir and debug_prefix:
-        _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_deboss_inv.png"), di)
-    return _ocr_run(di)
->>>>>>> Stashed changes
 
     # 5) deboss/emboss edges
     d = _prep_deboss_edges(crop)
@@ -263,7 +232,6 @@ def extract_imprint_text_roi(
         _safe_imwrite(os.path.join(debug_dir, f"{debug_prefix}_deboss_inv.png"), di)
     return _ocr_run(di)
 
->>>>>>> Stashed changes
 
 def extract_imprint_text(
     bgr: np.ndarray,

@@ -1,7 +1,8 @@
 # app/services/mfds_cache.py
 from __future__ import annotations
 
-import time, re
+import time
+import re
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 
@@ -10,22 +11,22 @@ from app.services.pill_db import fetch_pill_page
 _TOK_RE = re.compile(r"[A-Z0-9\-]{2,}")
 
 
-def _tok(s: str) -> list[str]:
+def _tokens(s: str) -> list[str]:
     return _TOK_RE.findall((s or "").upper())
 
 
-def _norm_tok(t: str) -> str:
-    """Normalize token for indexing / lookup."""
+def _norm_token(t: str) -> str:
+    # 하이픈 제거한 버전도 같이 인덱싱 (D-W == DW)
     return (t or "").upper().replace("-", "").strip()
 
 
 def _iter_print_tokens(it: Dict[str, Any]) -> List[str]:
-    """Extract imprint tokens from MFDS item (front+back)."""
     p = f"{it.get('PRINT_FRONT') or ''} {it.get('PRINT_BACK') or ''}".strip()
     if not p:
         return []
+    toks = _tokens(p)
     # stable unique
-    return list(dict.fromkeys(_tok(p)))
+    return list(dict.fromkeys(toks))
 
 
 class MFDSCache:
@@ -63,12 +64,12 @@ class MFDSCache:
 
             self.items = all_items
 
-            # ✅ 인덱스 구축: 토큰 원형/정규화(하이픈 제거) 둘 다 저장
+            # ✅ 인덱스 구축 (원형 + 하이픈제거 버전 둘 다)
             self.print_index.clear()
             for i, it in enumerate(self.items):
                 for t in _iter_print_tokens(it):
                     self.print_index[t].append(i)
-                    nt = _norm_tok(t)
+                    nt = _norm_token(t)
                     if nt and nt != t:
                         self.print_index[nt].append(i)
 
@@ -78,17 +79,5 @@ class MFDSCache:
         finally:
             self.loading = False
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
-        # defaultdict(list) 유지(호환)
-        if not isinstance(self.print_index, defaultdict):
-            tmp = defaultdict(list)
-            tmp.update(self.print_index)
-            self.print_index = tmp
-
->>>>>>> Stashed changes
 
 mfds_cache = MFDSCache()

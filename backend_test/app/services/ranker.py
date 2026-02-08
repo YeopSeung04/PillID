@@ -21,7 +21,11 @@ _TOKEN_RE = re.compile(r"[A-Z0-9\-]{2,}")
 
 
 def _norm(s: Optional[str]) -> str:
-    return (s or "").upper().strip()
+    s = (s or "").upper().strip()
+    # 흔한 노이즈: DW1 / D-W1 -> DW / D-W 취급
+    s = s.replace("D-W1", "D-W").replace("DW1", "DW")
+    return s
+
 
 
 def _tokens_list(s: str) -> list[str]:
@@ -36,14 +40,61 @@ def _tokens_set(s: str) -> Set[str]:
 
 def _tok_variants(t: str) -> Set[str]:
     """
-    OCR 토큰 변형 흡수:
-    - D-W <-> DW
-    - 기타 하이픈 제거 버전
+    OCR/YOLO 토큰 변형 흡수 (실전용):
+    - 하이픈 제거: D-W <-> DW
+    - 자주 헷갈리는 문자 치환:
+        VV <-> W
+        S  <-> C
+        0  <-> O
+        1  <-> I
+    - 조합(1~2회)까지 생성해서 recall을 올림
     """
     t = _norm(t)
     if not t:
         return set()
-    return {t, t.replace("-", "")}
+
+    # 0) 기본 후보
+    base = {t, t.replace("-", "")}
+
+    # 1) 치환 규칙 (단방향/양방향 섞음)
+    subs = [
+        ("VV", "W"),   # YOLO가 W를 VV로 자주 뽑음
+        ("W", "VV"),   # 반대도 허용
+        ("S", "C"),    # C/S 혼동
+        ("C", "S"),
+        ("0", "O"),    # 0/O 혼동
+        ("O", "0"),
+        ("1", "I"),    # 1/I 혼동
+        ("I", "1"),
+    ]
+
+    def apply_once(s: str) -> Set[str]:
+        out = set()
+        for a, b in subs:
+            if a in s:
+                out.add(s.replace(a, b))
+        return out
+
+    # 2) 1회 치환
+    v1 = set()
+    for s in list(base):
+        v1 |= apply_once(s)
+
+    # 3) 2회 치환(폭발 방지 위해 1회 결과에 한 번만 더)
+    v2 = set()
+    for s in list(v1):
+        v2 |= apply_once(s)
+
+    # 4) 최종 집합 (+ 하이픈 제거를 다시 한번 적용)
+    out = set()
+    for s in (base | v1 | v2):
+        out.add(s)
+        out.add(s.replace("-", ""))
+
+    # 너무 짧은 건 버림(오탐 방지)
+    out = {s for s in out if len(s) >= 2}
+
+    return out
 
 
 def _tok_weight(t: str) -> int:
@@ -56,6 +107,8 @@ def _tok_weight(t: str) -> int:
     t0 = _norm(t)
     t0_no = t0.replace("-", "")
     if t0 in ("D-W", "DW") or t0_no == "DW":
+        return 70
+    if t0 in ("D-VV", "DVV") or t0_no == "DVV":
         return 70
     if t0 == "PAC":
         return 60
@@ -180,17 +233,25 @@ def score_candidate(
     score = 0
 
     # 입력 각인 토큰(순서 유지)
-    toks = _tokens_list(target)
+    toks = list(dict.fromkeys(_tokens_list(target)))  # 순서 유지 중복 제거
 
-    # 토큰별 매칭 (하이픈 변형 포함)
+    matched = set()
+
     for t in toks:
         variants = _tok_variants(t)
         if not variants:
             continue
-
-        # token-set 교집합 매칭
         if variants & p_toks:
             score += _tok_weight(t)
+            matched.add(t.replace("-", ""))  # 정규화해서 기록
+
+    # PAC만 맞은 경우 HIGH로 못 가게 상한
+    matched_no = {m.replace("-", "") for m in matched}
+    if matched_no == {"PAC"}:
+        score = min(score, 69)  # HIGH(70) 못 넘게
+    # 2개 이상 토큰이 맞으면 보너스 (DW+PAC 같은 조합을 확실히 1등으로)
+    if len(matched_no) >= 2:
+        score += 25
 
     # 색/모양 가점 (너무 강하게 하면 비전 오판에 끌려감)
     if _item_has_shape(it, shape_guess):

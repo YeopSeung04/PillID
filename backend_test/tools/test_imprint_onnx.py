@@ -1,9 +1,11 @@
-import os
+import os, sys
 import cv2
-
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from app.services.imprint_ai import ImprintCharDetector, decode_detections_to_string
 from app.services.cropper import crop_and_segment_pill
 from app.services.pill_features import tight_crop_to_mask
+from app.services.imprint_roi import extract_imprint_roi
+from app.services.imprint_ai import make_ring_mask, decode_detections_to_string
 
 # 사용법:
 #   python tools/test_imprint_onnx.py path/to/image.jpg
@@ -26,12 +28,32 @@ print("detector ready =", detector.is_ready())
 
 crop, mask, rgba = crop_and_segment_pill(bgr)
 crop, mask = tight_crop_to_mask(crop, mask)
+crop, mask = extract_imprint_roi(crop, mask)
 
-dets = detector.infer(crop, mask=mask)
-text = decode_detections_to_string(dets)
 
-print("decoded =", text)
-print("num dets =", len(dets))
+h, w = crop.shape[:2]
+
+# 1) 좌측(흰색) 반쪽: D-W, PAC 잘 나오는 편
+x0, x1 = int(w * 0.00), int(w * 0.55)
+y0, y1 = int(h * 0.10), int(h * 0.90)
+
+crop = crop[y0:y1, x0:x1]
+mask = mask[y0:y1, x0:x1]
+
+# 원형일 때(캡슐 아님)만 링 마스크 사용
+ring = make_ring_mask(mask, inner_px=28, outer_px=2)
+dets = detector.infer(crop, mask=ring)
+
+h, w = crop.shape[:2]
+decoded = decode_detections_to_string(dets, img_w=w, img_h=h, radial=True)
+
+
+for d in dets:
+    print(d)
+
+#
+# print("decoded =", text)
+# print("num dets =", len(dets))
 
 # 결과 시각화 저장
 vis = crop.copy()

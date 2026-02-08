@@ -19,6 +19,7 @@ from app.services.imprint_ai import ImprintCharDetector, decode_detections_to_st
 from app.services.ocr import extract_imprint_text_roi
 from app.services.mfds_cache import mfds_cache
 from app.services.ranker import score_candidate, match_level
+from app.services.imprint_ai import ImprintCharDetector, decode_detections_to_string, make_ring_mask
 
 
 _TOK_RE = re.compile(r"[A-Z0-9\-]{2,}")
@@ -87,12 +88,36 @@ def identify_one_pill(
 
     # 3) imprint (YOLO char-detector 우선, 없으면 OCR fallback)
     imprint = ""
+    print("[pipe] is_capsule =", is_capsule, "detector_ready =", detector.is_ready())
     if detector is None:
         detector = ImprintCharDetector()  # env IMPRINT_YOLO_ONNX 있으면 로드
 
     if detector.is_ready():
-        dets = detector.infer(crop, mask=mask)
-        imprint = decode_detections_to_string(dets)
+        if is_capsule:
+            dets = detector.infer(crop, mask=mask)
+            imprint = decode_detections_to_string(dets, radial=False)
+            print("[pipe] dets =", len(dets), "sample =", dets[:5])
+
+        else:
+            ring = make_ring_mask(mask, inner_px=28, outer_px=2)
+            # ✅ 여기
+            if debug_dir:
+                cv2.imwrite(
+                    os.path.join(debug_dir, f"{debug_prefix}_ring.png"),
+                    ring
+                )
+            cv2.imwrite("tools/_ring.png", ring)
+
+            dets = detector.infer(crop, mask=ring)
+            h, w = crop.shape[:2]
+            imprint = decode_detections_to_string(
+                dets,
+                img_w=w,
+                img_h=h,
+                radial=True
+            )
+
+    print("[pipe] imprint(decoded) =", imprint)
 
     if not imprint:
         imprint_raw = extract_imprint_text_roi(

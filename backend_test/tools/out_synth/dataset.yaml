@@ -1,4 +1,4 @@
-path: F:\개발\PillID\backend_test\tools\out_synth
+path: /Users/han-seung-yeop/Documents/GitHub/PillID/backend_test/tools/out_synth
 train: images/train
 val: images/val
 nc: 38

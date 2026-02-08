@@ -14,7 +14,7 @@ from app.services.ocr import extract_imprint_text_roi
 from app.services.ranker import score_candidate, match_level
 from app.services.pipeline_single import identify_one_pill
 from app.services.imprint_ai import ImprintCharDetector
-
+from app.services.mfds_cache import mfds_cache
 
 MFDS_PAGES = 50
 MFDS_ROWS = 100
@@ -129,11 +129,19 @@ def _prefilter_items(items, shape_guess, color_guess):
 
 @app.on_event("startup")
 async def on_startup():
-    async def _load():
-        await mfds_cache.refresh(pages=MFDS_PAGES, rows=MFDS_ROWS)
-        print(f"[MFDS] cache loaded: {len(mfds_cache.items)} items")
+    await mfds_cache.ensure_loaded(
+        pages=50,
+        rows=100,
+        ttl_seconds=30 * 24 * 3600
+    )
 
-    asyncio.create_task(_load())
+    # 🔹 TTL 지났을 때만 백그라운드 갱신
+    if mfds_cache.is_stale(30 * 24 * 3600):
+        async def _refresh_bg():
+            await mfds_cache.refresh(pages=50, rows=100)
+            print(f"[MFDS] background refresh done: {len(mfds_cache.items)} items")
+
+        asyncio.create_task(_refresh_bg())
 
 
 @app.post("/identify", response_model=IdentifyResponse)

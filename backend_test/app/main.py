@@ -36,9 +36,48 @@ _CHAR_DET = ImprintCharDetector()
 
 def _post_fix_imprint(imprint: str) -> str:
     s = (imprint or "").upper()
-    s = re.sub(r"[A-Z]?PAC[A-Z]?", "PAC", s)
+
+    # 공백/잡문자 정리
+    s = re.sub(r"[^A-Z0-9\-\s\.]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-    return s
+
+    # D-W1 / DW1 같은 흔한 노이즈 제거
+    s = s.replace("D-W1", "D-W").replace("DW1", "DW")
+
+    # PAC 표기 흔들림 흡수
+    s = re.sub(r"\b[A-Z]?PAC[A-Z]?\b", "PAC", s)
+
+    # 토큰화 후 중복 제거(순서 유지)
+    toks = _TOK_RE.findall(s)
+    seen = set()
+    out = []
+    for t in toks:
+        t0 = t.replace("-", "")
+        if t0 in seen:
+            continue
+        seen.add(t0)
+        out.append(t)
+
+    # DW/D-W 정규화
+    out2 = []
+    for t in out:
+        if t.replace("-", "") == "DW":
+            out2.append("D-W")
+        else:
+            out2.append(t)
+
+    # 캡슐 대표 패턴은 고정 출력
+    has_dw = any(t.replace("-", "") == "DW" for t in out2)
+    has_pac = any(t == "PAC" for t in out2)
+    if has_dw and has_pac:
+        return "D-W PAC"
+    if has_dw:
+        return "D-W"
+    if has_pac:
+        return "PAC"
+
+    return " ".join(out2).strip()
+
 
 
 def _gen_ocr_variants(imprint: str) -> list[str]:

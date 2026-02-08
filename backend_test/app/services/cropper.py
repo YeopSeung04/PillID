@@ -1,3 +1,5 @@
+# app/services/cropper.py
+
 import cv2
 import numpy as np
 
